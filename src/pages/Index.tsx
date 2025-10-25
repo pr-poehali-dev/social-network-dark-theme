@@ -22,7 +22,10 @@ interface Message {
   sender_id: number;
   content: string;
   image_url: string | null;
+  audio_url: string | null;
+  audio_duration?: number;
   created_at: string;
+  edited?: boolean;
 }
 
 const Index = () => {
@@ -35,6 +38,11 @@ const Index = () => {
   const [selectedChat, setSelectedChat] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState('');
 
   useEffect(() => {
     const savedUser = localStorage.getItem('currentUser');
@@ -120,6 +128,7 @@ const Index = () => {
       sender_id: currentUser.id,
       content: newMessage,
       image_url: null,
+      audio_url: null,
       created_at: new Date().toISOString(),
     };
 
@@ -135,6 +144,7 @@ const Index = () => {
           sender_id: selectedChat.id,
           content: 'Извините, я не могу отвечать на сообщения.',
           image_url: null,
+          audio_url: null,
           created_at: new Date().toISOString(),
         };
         const withBotReply = [...updatedMessages, botReply];
@@ -142,6 +152,99 @@ const Index = () => {
         saveMessages(withBotReply);
       }, 500);
     }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const audioChunks: Blob[] = [];
+
+      recorder.ondataavailable = (event) => {
+        audioChunks.push(event.data);
+      };
+
+      recorder.onstop = () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (selectedChat && currentUser) {
+            const message: Message = {
+              id: Date.now(),
+              sender_id: currentUser.id,
+              content: '',
+              image_url: null,
+              audio_url: reader.result as string,
+              audio_duration: recordingTime,
+              created_at: new Date().toISOString(),
+            };
+            const updatedMessages = [...messages, message];
+            setMessages(updatedMessages);
+            saveMessages(updatedMessages);
+          }
+        };
+        reader.readAsDataURL(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      setRecordingTime(0);
+
+      const interval = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+
+      (recorder as any).interval = interval;
+    } catch (error) {
+      console.error('Ошибка доступа к микрофону:', error);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && isRecording) {
+      clearInterval((mediaRecorder as any).interval);
+      mediaRecorder.stop();
+      setIsRecording(false);
+      setMediaRecorder(null);
+    }
+  };
+
+  const deleteMessage = (messageId: number) => {
+    const updatedMessages = messages.filter(msg => msg.id !== messageId);
+    setMessages(updatedMessages);
+    saveMessages(updatedMessages);
+  };
+
+  const startEditMessage = (message: Message) => {
+    setEditingMessageId(message.id);
+    setEditingText(message.content);
+  };
+
+  const saveEditMessage = () => {
+    if (!editingText.trim() || editingMessageId === null) return;
+
+    const updatedMessages = messages.map(msg => 
+      msg.id === editingMessageId 
+        ? { ...msg, content: editingText, edited: true }
+        : msg
+    );
+    setMessages(updatedMessages);
+    saveMessages(updatedMessages);
+    setEditingMessageId(null);
+    setEditingText('');
+  };
+
+  const cancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingText('');
+  };
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -154,6 +257,7 @@ const Index = () => {
           sender_id: currentUser.id,
           content: '',
           image_url: reader.result as string,
+          audio_url: null,
           created_at: new Date().toISOString(),
         };
         const updatedMessages = [...messages, message];
@@ -358,18 +462,38 @@ const Index = () => {
         <Card className="flex-1 bg-card/95 backdrop-blur border-primary/20 flex flex-col">
           {selectedChat ? (
             <>
-              <div className="p-4 border-b border-primary/20 flex items-center gap-3">
-                <Avatar className="border-2 border-primary/50">
-                  <AvatarImage src={selectedChat.avatar_url || undefined} />
-                  <AvatarFallback className="bg-gradient-to-br from-primary to-secondary text-white">
-                    {selectedChat.display_name[0]}
-                  </AvatarFallback>
-                </Avatar>
-                <div>
-                  <p className="font-medium">{selectedChat.display_name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {selectedChat.is_online ? 'В сети' : 'Не в сети'}
-                  </p>
+              <div className="p-4 border-b border-primary/20 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Avatar className="border-2 border-primary/50">
+                    <AvatarImage src={selectedChat.avatar_url || undefined} />
+                    <AvatarFallback className="bg-gradient-to-br from-primary to-secondary text-white">
+                      {selectedChat.display_name[0]}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="font-medium">{selectedChat.display_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedChat.is_online ? 'В сети' : 'Не в сети'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="border-primary/20"
+                    onClick={() => window.open(`https://t.me/${selectedChat.username}`, '_blank')}
+                  >
+                    <Icon name="Phone" size={20} />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="border-primary/20"
+                    onClick={() => window.open(`https://wa.me/${selectedChat.username}`, '_blank')}
+                  >
+                    <Icon name="Video" size={20} />
+                  </Button>
                 </div>
               </div>
 
@@ -377,36 +501,113 @@ const Index = () => {
                 <div className="space-y-4">
                   {messages.map((msg) => {
                     const isOwn = msg.sender_id === currentUser.id;
+                    const isEditing = editingMessageId === msg.id;
                     return (
                       <div
                         key={msg.id}
-                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}
+                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'} group`}
                       >
-                        <div
-                          className={`max-w-[70%] rounded-2xl px-4 py-2 ${
-                            isOwn
-                              ? 'bg-gradient-to-r from-primary to-secondary text-white'
-                              : 'bg-muted'
-                          }`}
-                        >
-                          {msg.image_url && (
-                            <img
-                              src={msg.image_url}
-                              alt="Изображение"
-                              className="rounded-lg mb-2 max-w-full"
-                            />
+                        <div className="flex items-end gap-2">
+                          {isOwn && (
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                              {msg.content && !msg.audio_url && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => startEditMessage(msg)}
+                                >
+                                  <Icon name="Pencil" size={16} />
+                                </Button>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive"
+                                onClick={() => deleteMessage(msg.id)}
+                              >
+                                <Icon name="Trash2" size={16} />
+                              </Button>
+                            </div>
                           )}
-                          {msg.content && <p>{msg.content}</p>}
-                          <p
-                            className={`text-xs mt-1 ${
-                              isOwn ? 'text-white/70' : 'text-muted-foreground'
+                          <div
+                            className={`max-w-[70%] rounded-2xl px-4 py-2 ${
+                              isOwn
+                                ? 'bg-gradient-to-r from-primary to-secondary text-white'
+                                : 'bg-muted'
                             }`}
                           >
-                            {new Date(msg.created_at).toLocaleTimeString('ru-RU', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </p>
+                            {msg.image_url && (
+                              <img
+                                src={msg.image_url}
+                                alt="Изображение"
+                                className="rounded-lg mb-2 max-w-full"
+                              />
+                            )}
+                            {msg.audio_url && (
+                              <div className="flex items-center gap-3">
+                                <Icon name="Mic" size={20} />
+                                <audio controls className="max-w-[250px]">
+                                  <source src={msg.audio_url} type="audio/webm" />
+                                </audio>
+                                {msg.audio_duration && (
+                                  <span className="text-xs">
+                                    {formatDuration(msg.audio_duration)}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {isEditing ? (
+                              <div className="space-y-2">
+                                <Input
+                                  value={editingText}
+                                  onChange={(e) => setEditingText(e.target.value)}
+                                  className="bg-white/10 border-white/20 text-white"
+                                  onKeyPress={(e) => e.key === 'Enter' && saveEditMessage()}
+                                />
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    onClick={saveEditMessage}
+                                    className="bg-white/20 hover:bg-white/30"
+                                  >
+                                    Сохранить
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={cancelEdit}
+                                    className="hover:bg-white/10"
+                                  >
+                                    Отмена
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              msg.content && (
+                                <div>
+                                  <p>{msg.content}</p>
+                                  {msg.edited && (
+                                    <span className={`text-xs italic ${
+                                      isOwn ? 'text-white/50' : 'text-muted-foreground/70'
+                                    }`}>
+                                      {' '}(изменено)
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            )}
+                            <p
+                              className={`text-xs mt-1 ${
+                                isOwn ? 'text-white/70' : 'text-muted-foreground'
+                              }`}
+                            >
+                              {new Date(msg.created_at).toLocaleTimeString('ru-RU', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
                         </div>
                       </div>
                     );
@@ -414,33 +615,61 @@ const Index = () => {
                 </div>
               </ScrollArea>
 
-              <div className="p-4 border-t border-primary/20 flex gap-2">
-                <label className="cursor-pointer">
-                  <Button variant="outline" size="icon" className="border-primary/20" asChild>
-                    <span>
-                      <Icon name="Image" size={20} />
+              <div className="p-4 border-t border-primary/20">
+                {isRecording && (
+                  <div className="mb-3 flex items-center justify-center gap-3 p-3 bg-destructive/20 rounded-lg">
+                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                    <span className="font-medium">
+                      Запись: {formatDuration(recordingTime)}
                     </span>
+                    <Button
+                      onClick={stopRecording}
+                      size="sm"
+                      className="bg-destructive hover:bg-destructive/90"
+                    >
+                      Остановить
+                    </Button>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <label className="cursor-pointer">
+                    <Button variant="outline" size="icon" className="border-primary/20" asChild>
+                      <span>
+                        <Icon name="Image" size={20} />
+                      </span>
+                    </Button>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="border-primary/20"
+                    onClick={isRecording ? stopRecording : startRecording}
+                    disabled={isRecording}
+                  >
+                    <Icon name="Mic" size={20} className={isRecording ? 'text-red-500' : ''} />
                   </Button>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                    className="hidden"
+                  <Input
+                    placeholder="Введите сообщение..."
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                    className="flex-1 bg-muted/50 border-primary/20"
+                    disabled={isRecording}
                   />
-                </label>
-                <Input
-                  placeholder="Введите сообщение..."
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                  className="flex-1 bg-muted/50 border-primary/20"
-                />
-                <Button
-                  onClick={handleSendMessage}
-                  className="bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white"
-                >
-                  <Icon name="Send" size={20} />
-                </Button>
+                  <Button
+                    onClick={handleSendMessage}
+                    className="bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white"
+                    disabled={isRecording}
+                  >
+                    <Icon name="Send" size={20} />
+                  </Button>
+                </div>
               </div>
             </>
           ) : (
