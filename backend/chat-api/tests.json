@@ -1,0 +1,47 @@
+{
+  "tests": [
+    {
+      "name": "Test OPTIONS request",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Test create group",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "action": "create_group",
+        "name": "Test Group",
+        "created_by": 1,
+        "members": [1]
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "group": {
+          "id": "number",
+          "name": "string"
+        }
+      },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Test send message",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "action": "send_message",
+        "sender_id": 1,
+        "content": "Hello",
+        "chat_id": 1
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "message": {
+          "content": "string"
+        }
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
