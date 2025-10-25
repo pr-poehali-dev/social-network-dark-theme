@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,6 +7,9 @@ import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import Icon from '@/components/ui/icon';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { useToast } from '@/hooks/use-toast';
 
 interface User {
   id: number;
@@ -16,6 +19,17 @@ interface User {
   bio: string | null;
   is_online: boolean;
 }
+
+interface Group {
+  id: number;
+  name: string;
+  avatar_url: string | null;
+  members: number[];
+  created_at: string;
+  is_group: true;
+}
+
+type Chat = User | Group;
 
 interface Message {
   id: number;
@@ -34,8 +48,9 @@ const Index = () => {
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedChat, setSelectedChat] = useState<User | null>(null);
+  const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -43,8 +58,16 @@ const Index = () => {
   const [recordingTime, setRecordingTime] = useState(0);
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [selectedMembers, setSelectedMembers] = useState<number[]>([]);
+  const notificationSound = useRef<HTMLAudioElement | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
+    notificationSound.current = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZURE');
     const savedUser = localStorage.getItem('currentUser');
     if (savedUser) {
       setCurrentUser(JSON.parse(savedUser));
@@ -70,7 +93,32 @@ const Index = () => {
       },
     ];
     setUsers(mockUsers);
+    
+    const savedGroups = localStorage.getItem('groups');
+    if (savedGroups) {
+      setGroups(JSON.parse(savedGroups));
+    }
   };
+
+  const playNotificationSound = () => {
+    if (notificationSound.current) {
+      notificationSound.current.play().catch(e => console.log('Sound play failed:', e));
+    }
+  };
+
+  const showNotification = (title: string, body: string) => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body, icon: 'https://cdn.poehali.dev/files/754d186f-dd97-4432-bf56-897f0937bf7b.png' });
+    }
+    toast({ title, description: body });
+    playNotificationSound();
+  };
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
 
   const loadMessages = () => {
     if (!selectedChat) return;
@@ -136,8 +184,10 @@ const Index = () => {
     setMessages(updatedMessages);
     saveMessages(updatedMessages);
     setNewMessage('');
+    setIsTyping(false);
 
-    if (selectedChat.username === 'ti_test') {
+    if ('username' in selectedChat && selectedChat.username === 'ti_test') {
+      setIsTyping(true);
       setTimeout(() => {
         const botReply: Message = {
           id: Date.now() + 1,
@@ -150,8 +200,54 @@ const Index = () => {
         const withBotReply = [...updatedMessages, botReply];
         setMessages(withBotReply);
         saveMessages(withBotReply);
-      }, 500);
+        setIsTyping(false);
+        showNotification('Ti Test', 'Извините, я не могу отвечать на сообщения.');
+      }, 1500);
     }
+  };
+
+  const handleMessageChange = (text: string) => {
+    setNewMessage(text);
+    
+    if (typingTimeout) {
+      clearTimeout(typingTimeout);
+    }
+    
+    const timeout = setTimeout(() => {
+      setIsTyping(false);
+    }, 1000);
+    
+    setTypingTimeout(timeout);
+  };
+
+  const createGroup = () => {
+    if (!groupName.trim() || selectedMembers.length === 0 || !currentUser) return;
+
+    const newGroup: Group = {
+      id: Date.now(),
+      name: groupName,
+      avatar_url: null,
+      members: [currentUser.id, ...selectedMembers],
+      created_at: new Date().toISOString(),
+      is_group: true,
+    };
+
+    const updatedGroups = [...groups, newGroup];
+    setGroups(updatedGroups);
+    localStorage.setItem('groups', JSON.stringify(updatedGroups));
+    
+    setGroupName('');
+    setSelectedMembers([]);
+    setShowCreateGroup(false);
+    toast({ title: 'Группа создана', description: `Группа "${newGroup.name}" успешно создана` });
+  };
+
+  const toggleMemberSelection = (userId: number) => {
+    setSelectedMembers(prev => 
+      prev.includes(userId) 
+        ? prev.filter(id => id !== userId)
+        : [...prev, userId]
+    );
   };
 
   const startRecording = async () => {
@@ -274,6 +370,12 @@ const Index = () => {
       user.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const filteredGroups = groups.filter((group) =>
+    group.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const allChats = [...filteredUsers, ...filteredGroups];
+
   if (!currentUser) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-[#1E3A8A] via-[#0EA5E9] to-[#06B6D4]">
@@ -362,6 +464,55 @@ const Index = () => {
             />
           </div>
 
+          <div className="p-4 border-b border-primary/20">
+            <Dialog open={showCreateGroup} onOpenChange={setShowCreateGroup}>
+              <DialogTrigger asChild>
+                <Button className="w-full bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white">
+                  <Icon name="Users" size={20} className="mr-2" />
+                  Создать группу
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="bg-card border-primary/20">
+                <DialogHeader>
+                  <DialogTitle>Создать новую группу</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <Input
+                    placeholder="Название группы"
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                    className="bg-muted/50 border-primary/20"
+                  />
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Выберите участников:</p>
+                    <ScrollArea className="h-48">
+                      {users.map((user) => (
+                        <div key={user.id} className="flex items-center gap-2 p-2 hover:bg-muted/50 rounded">
+                          <Checkbox
+                            checked={selectedMembers.includes(user.id)}
+                            onCheckedChange={() => toggleMemberSelection(user.id)}
+                          />
+                          <Avatar className="w-8 h-8">
+                            <AvatarImage src={user.avatar_url || undefined} />
+                            <AvatarFallback>{user.display_name[0]}</AvatarFallback>
+                          </Avatar>
+                          <span>{user.display_name}</span>
+                        </div>
+                      ))}
+                    </ScrollArea>
+                  </div>
+                  <Button
+                    onClick={createGroup}
+                    disabled={!groupName.trim() || selectedMembers.length === 0}
+                    className="w-full bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white"
+                  >
+                    Создать
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+
           <Tabs defaultValue="online" className="flex-1 flex flex-col">
             <TabsList className="mx-4 mt-4 grid grid-cols-2 bg-muted/50">
               <TabsTrigger value="online">Онлайн</TabsTrigger>
@@ -409,7 +560,7 @@ const Index = () => {
             <TabsContent value="all" className="flex-1 mt-0">
               <ScrollArea className="h-full">
                 <div className="p-4 space-y-2">
-                  {filteredUsers.map((user) => (
+                  {allChats.map((chat) => (
                     <div
                       key={user.id}
                       onClick={() => setSelectedChat(user)}
